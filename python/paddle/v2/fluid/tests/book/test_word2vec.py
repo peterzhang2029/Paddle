@@ -1,8 +1,9 @@
 import numpy as np
 import paddle.v2 as paddle
 import paddle.v2.fluid as fluid
+import time
 
-PASS_NUM = 100
+PASS_NUM = 4
 EMBED_SIZE = 32
 HIDDEN_SIZE = 256
 N = 5
@@ -52,6 +53,7 @@ avg_cost = fluid.layers.mean(x=cost)
 sgd_optimizer = fluid.optimizer.SGD(learning_rate=0.001)
 sgd_optimizer.minimize(avg_cost)
 
+accuracy = fluid.evaluator.Accuracy(input=predict_word, label=next_word)
 train_reader = paddle.batch(
     paddle.dataset.imikolov.train(word_dict, N), BATCH_SIZE)
 
@@ -60,14 +62,23 @@ exe = fluid.Executor(place)
 feeder = fluid.DataFeeder(
     feed_list=[first_word, second_word, third_word, forth_word, next_word],
     place=place)
-
 exe.run(fluid.default_startup_program())
 
 for pass_id in range(PASS_NUM):
+    accuracy.reset(exe)
+    batch_id = 0
+    print("pass: ", pass_id," begin")
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     for data in train_reader():
-        avg_cost_np = exe.run(fluid.default_main_program(),
+        avg_cost_np, acc = exe.run(fluid.default_main_program(),
                               feed=feeder.feed(data),
-                              fetch_list=[avg_cost])
-        if avg_cost_np[0] < 5.0:
-            exit(0)  # if avg cost less than 10.0, we think our code is good.
-exit(1)
+                              fetch_list=[avg_cost] + accuracy.metrics)
+        pass_acc = accuracy.eval(exe)
+        
+        if batch_id % 100 == 0 and batch_id != 0:
+            print("batch_id=" + str(batch_id) + " train_cost=" + str(avg_cost_np[0]) 
+                  + " train_acc=" + str(acc) + " train_pass_acc=" + str(pass_acc))
+
+        batch_id += 1
+    print("pass: ", pass_id," end")
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
