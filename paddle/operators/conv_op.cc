@@ -30,6 +30,7 @@ void ConvOp::InferShape(framework::InferShapeContext* ctx) const {
   std::vector<int> strides = ctx->Attrs().Get<std::vector<int>>("strides");
   std::vector<int> paddings = ctx->Attrs().Get<std::vector<int>>("paddings");
   int groups = ctx->Attrs().Get<int>("groups");
+  std::vector<int> dilations = ctx->Attrs().Get<std::vector<int>>("dilations");
   int input_channels = in_dims[1];
   int output_channels = filter_dims[0];
 
@@ -52,9 +53,15 @@ void ConvOp::InferShape(framework::InferShapeContext* ctx) const {
       "The number of output channels should be divided by groups.");
 
   std::vector<int64_t> output_shape({in_dims[0], filter_dims[0]});
-  for (size_t i = 0; i < paddings.size(); ++i) {
+  for (size_t i = 0; i < strides.size(); ++i) {
+    PADDLE_ENFORCE(in_dims[i + 2] + 2 * paddings[i] -
+                           (dilations[i] * (filter_dims[i + 2] - 1) + 1) >
+                       0,
+                   "Due to the settings of paddings, filter_dims and "
+                   "dilations, the output size is less than 0, please check "
+                   "again.");
     output_shape.push_back(OutputSize(in_dims[i + 2], filter_dims[i + 2],
-                                      paddings[i], strides[i]));
+                                      dilations[i], paddings[i], strides[i]));
   }
   ctx->SetOutputDim("Output", framework::make_ddim(output_shape));
 }
@@ -78,39 +85,56 @@ Conv2DOpMaker::Conv2DOpMaker(framework::OpProto* proto,
   AddOutput("Output",
             "(Tensor) The output tensor of convolution operator. "
             "The format of output tensor is also NCHW.");
-  AddAttr<std::vector<int>>("strides", "strides of convolution operator.")
+  AddAttr<std::vector<int>>("strides",
+                            "(vector<int> default:{1, 1}), the "
+                            "strides(h_stride, w_stride) of "
+                            "convolution operator.")
       .SetDefault({1, 1});
-  AddAttr<std::vector<int>>("paddings", "paddings of convolution operator.")
+  AddAttr<std::vector<int>>("paddings",
+                            "(vector<int> default:{0, 0}), the "
+                            "paddings(h_pad, w_pad) of "
+                            "convolution operator.")
       .SetDefault({0, 0});
   AddAttr<int>(
       "groups",
-      "(int default:1), the group size of convolution operator. "
+      "(int default:1), the groups number of the convolution operator. "
       "According to grouped convolution in Alex Krizhevsky's Deep CNN paper: "
       "when group=2, the first half of the filters is only connected to the "
       "first half of the input channels, while the second half of the filters "
       "is only connected to the second half of the input channels.")
       .SetDefault(1);
+  AddAttr<std::vector<int>>("dilations",
+                            "(vector<int> default:{1, 1}), the "
+                            "dilations(h_dilation, w_dilation) of "
+                            "convolution operator.")
+      .SetDefault({1, 1});
   AddComment(R"DOC(
 Convolution Operator.
 
 The convolution operation calculates the output based on the input, filter
-and strides, paddings, groups parameters. The size of each dimension of the
+and strides, paddings, dilations, groups parameters. The size of each dimension of the
 parameters is checked in the infer-shape.
-Input(Input, Filter) and output(Output) are in NCHW format. Where N is batch
+Input(Input) and Output(Output) are in NCHW format. Where N is batch
 size, C is the number of channels, H is the height of the feature, and W is
-the width of the feature. Parameters(ksize, strides, paddings) are two elements.
-These two elements represent height and width, respectively.
+the width of the feature.
+Filters(Input) is MCHW format. Where M is the number of output image channels, C is
+the number of input image channels, H is the height of the filter, and W
+is the width of the filter.
+Parameters(strides, paddings, dilations) are two elements. These two elements represent
+height and width, respectively.
 The input(X) size and output(Out) size may be different.
 
 Example:
   Input:
-       Input shape: (N, C_in, H_in, W_in)
-       Filter shape: (C_out, C_in, H_f, W_f)
+       Input shape: $(N, C_{in}, H_{in}, W_{in})$
+       Filter shape: $(C_{out}, C_{in}, H_f, W_f)$
   Output:
-       Output shape: (N, C_out, H_out, W_out)
-  where
-       H_out = (H_in - filter_size[0] + 2 * paddings[0]) / strides[0] + 1;
-       W_out = (W_in - filter_size[1] + 2 * paddings[1]) / strides[1] + 1;
+       Output shape: $(N, C_{out}, H_{out}, W_{out})$
+  Where
+$$
+       H_{out}= \frac{(H_{in} + 2 * paddings[0] - (dilations[0] * (H_f - 1) + 1))}{strides[0]}+ 1 \\
+       W_{out}= \frac{(W_{in} + 2 * paddings[1] - (dilations[1] * (W_f - 1) + 1))}{strides[1]}+ 1
+$$
 )DOC");
 }
 
@@ -135,45 +159,58 @@ Conv3DOpMaker::Conv3DOpMaker(framework::OpProto* proto,
   AddOutput("Output",
             "(Tensor) The output tensor of convolution operator."
             "The format of output tensor is also NCDHW.");
-  AddAttr<std::vector<int>>(
-      "strides",
-      "(vector, default:{0, 0, 0}), the strides of convolution operator.")
+  AddAttr<std::vector<int>>("strides",
+                            "(vector<int>, default:{1, 1, 1}), the "
+                            "strides(d_stride, h_stride, w_stride) of "
+                            "convolution operator.")
       .SetDefault({1, 1, 1});
-  AddAttr<std::vector<int>>(
-      "paddings",
-      "(vector, default:{0, 0, 0}), the paddings of convolution operator.")
+  AddAttr<std::vector<int>>("paddings",
+                            "(vector<int>, default:{0, 0, 0}), the "
+                            "paddings(d_pad, h_pad, w_pad) of convolution "
+                            "operator.")
       .SetDefault({0, 0, 0});
   AddAttr<int>(
       "groups",
-      "(int default:1), the group size of convolution operator. "
+      "(int default:1), the groups number of the convolution operator. "
       "According to grouped convolution in Alex Krizhevsky's Deep CNN paper: "
       "when group=2, the first half of the filters is only connected to the "
       "first half of the input channels, while the second half of the filters "
       "is only connected to the second half of the input channels.")
       .SetDefault(1);
+  AddAttr<std::vector<int>>("dilations",
+                            "(vector<int> default:{1, 1, 1}), the "
+                            "dilations(d_dilation, h_dilation, w_dilation) of "
+                            "convolution operator.")
+      .SetDefault({1, 1, 1});
 
   AddComment(R"DOC(
 Convolution3D Operator.
 
 The convolution operation calculates the output based on the input, filter
-and strides, paddings, groups parameters. The size of each dimension of the
+and strides, paddings, dilations, groups parameters. The size of each dimension of the
 parameters is checked in the infer-shape.
-Input(Input, Filter) and output(Output) are in NCDHW format. Where N is batch
+Input(Input) and output(Output) are in NCDHW format, where N is batch
 size, C is the number of channels,D is the depth of the feature, H is the height of
-the feature, and W is the width of the feature. Parameters(ksize, strides, paddings)
-are three elements. These three elements represent depth, height and width, respectively.
+the feature, and W is the width of the feature.
+Filters(Input) is MCDHW format, where M is the number of output image channels,
+C is the number of input image channels, D is the depth of the filter,
+H is the height of the filter, and W is the width of the filter.
+Parameters(strides, paddings, dilations) are three elements. These three elements
+represent depth, height and width, respectively.
 The input(X) size and output(Out) size may be different.
 
 Example:
   Input:
-       Input shape: (N, C_in, D_in, H_in, W_in)
-       Filter shape: (C_out, C_in, D_f, H_f, W_f)
+       Input shape: $(N, C_{in}, D_{in}, H_{in}, W_{in})$
+       Filter shape: $(C_{out}, C_{in}, D_f, H_f, W_f)$
   Output:
-       Output shape: (N, C_out, D_out, H_out, W_out)
-  where
-       D_out = (D_in - filter_size[0] + 2 * paddings[0]) / strides[0] + 1;
-       H_out = (H_in - filter_size[1] + 2 * paddings[1]) / strides[1] + 1;
-       W_out = (W_in - filter_size[2] + 2 * paddings[2]) / strides[2] + 1;
+       Output shape: $(N, C_{out}, D_{out}, H_{out}, W_{out})$
+  Where
+  $$
+       D_{out}= \frac{(D_{in} + 2 * paddings[0] - (dilations[0] * (D_f - 1) + 1))}{ strides[0]}+ 1 \\
+       H_{out}= \frac{(H_{in} + 2 * paddings[1] - (dilations[1] * (H_f - 1) + 1))}{ strides[1]}+ 1 \\
+       W_{out}= \frac{(W_{in} + 2 * paddings[2] - (dilations[2] * (W_f - 1) + 1))}{ strides[2]}+ 1
+  $$
 )DOC");
 }
 
@@ -199,11 +236,15 @@ REGISTER_OP(conv3d, ops::ConvOp, ops::Conv3DOpMaker, conv3d_grad,
             ops::ConvOpGrad);
 
 REGISTER_OP_CPU_KERNEL(conv2d,
-                       ops::GemmConvKernel<paddle::platform::CPUPlace, float>);
+                       ops::GemmConvKernel<paddle::platform::CPUPlace, float>,
+                       ops::GemmConvKernel<paddle::platform::CPUPlace, double>);
 REGISTER_OP_CPU_KERNEL(
-    conv2d_grad, ops::GemmConvGradKernel<paddle::platform::CPUPlace, float>);
+    conv2d_grad, ops::GemmConvGradKernel<paddle::platform::CPUPlace, float>,
+    ops::GemmConvGradKernel<paddle::platform::CPUPlace, double>);
 
 REGISTER_OP_CPU_KERNEL(conv3d,
-                       ops::GemmConvKernel<paddle::platform::CPUPlace, float>);
+                       ops::GemmConvKernel<paddle::platform::CPUPlace, float>,
+                       ops::GemmConvKernel<paddle::platform::CPUPlace, double>);
 REGISTER_OP_CPU_KERNEL(
-    conv3d_grad, ops::GemmConvGradKernel<paddle::platform::CPUPlace, float>);
+    conv3d_grad, ops::GemmConvGradKernel<paddle::platform::CPUPlace, float>,
+    ops::GemmConvGradKernel<paddle::platform::CPUPlace, double>);

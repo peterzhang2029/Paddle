@@ -36,13 +36,11 @@ Scope& Scope::NewScope() const {
 }
 
 Variable* Scope::Var(const std::string& name) {
-  auto iter = vars_.find(name);
-  if (iter != vars_.end()) {
-    return iter->second;
-  }
-  Variable* v = new Variable();
+  auto* v = FindVarLocally(name);
+  if (v != nullptr) return v;
+  v = new Variable();
   vars_[name] = v;
-  VLOG(3) << "Create variable " << name << " on scope";
+  VLOG(3) << "Create variable " << name;
   v->name_ = &(vars_.find(name)->first);
   return v;
 }
@@ -56,8 +54,10 @@ Variable* Scope::Var(std::string* name) {
 }
 
 Variable* Scope::FindVar(const std::string& name) const {
-  auto it = vars_.find(name);
-  if (it != vars_.end()) return it->second;
+  auto var = FindVarLocally(name);
+  if (var != nullptr) {
+    return var;
+  }
   return (parent_ == nullptr) ? nullptr : parent_->FindVar(name);
 }
 
@@ -114,6 +114,11 @@ std::string Scope::Rename(const std::string& origin_name) const {
   auto var_name = string::Sprintf("%p.%d", this, vars_.size());
   Rename(origin_name, var_name);
   return var_name;
+}
+Variable* Scope::FindVarLocally(const std::string& name) const {
+  auto it = vars_.find(name);
+  if (it != vars_.end()) return it->second;
+  return nullptr;
 }
 
 }  // namespace framework
